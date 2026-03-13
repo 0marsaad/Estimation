@@ -6,6 +6,23 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
+// Read Django's csrftoken cookie and attach it as X-CSRFToken on every
+// mutating request so SessionAuthentication's CSRF check passes.
+function getCsrfToken() {
+  const match = document.cookie
+    .split('; ')
+    .find((row) => row.startsWith('csrftoken='));
+  return match ? match.split('=')[1] : null;
+}
+
+api.interceptors.request.use((config) => {
+  const csrfToken = getCsrfToken();
+  if (csrfToken) {
+    config.headers['X-CSRFToken'] = csrfToken;
+  }
+  return config;
+});
+
 // ---- Auth ----
 export const register = (username, password) =>
   api.post('/auth/register/', { username, password });

@@ -22,8 +22,10 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     # Third party
     'rest_framework',
+    'rest_framework.authtoken',
     'corsheaders',
     'channels',
+    'drf_spectacular',
     # Local apps
     'apps.users',
     'apps.rooms',
@@ -94,10 +96,34 @@ AUTH_PASSWORD_VALIDATORS = [
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.TokenAuthentication',
         'rest_framework.authentication.SessionAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
+    ],
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+}
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Estimation Calculator API',
+    'DESCRIPTION': (
+        'Backend API for the Estimation card game.\n\n'
+        '## Authentication\n'
+        '1. Call `POST /api/auth/token/` with `{"username": "...", "password": "..."}` '
+        'to obtain an API token.\n'
+        '2. Click **Authorize** above and enter `Token <your-token>` in the '
+        '**tokenAuth (apiKey)** field.\n'
+        '3. All subsequent requests will be authenticated automatically.'
+    ),
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'COMPONENT_SPLIT_REQUEST': True,
+    'TAGS': [
+        {'name': 'auth', 'description': 'Registration, login, logout, current user and token'},
+        {'name': 'rooms', 'description': 'Create and join game rooms'},
+        {'name': 'game', 'description': 'Game lifecycle — start, bid, estimate, play, scoring'},
+        {'name': 'scoring', 'description': 'Read score history per round or per game'},
     ],
 }
 

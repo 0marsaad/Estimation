@@ -3,6 +3,9 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
+from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse, inline_serializer
+from drf_spectacular.types import OpenApiTypes
+from rest_framework import serializers as drf_serializers
 from apps.rooms.models import Room, Player
 from apps.scoring.models import Score
 from .models import Game, Round, Bid, Estimation
@@ -24,7 +27,18 @@ def _get_player_or_404(request, room):
     return player
 
 
-# POST /game/start
+@extend_schema(
+    tags=['game'],
+    summary='Start a game',
+    description='Starts the game for a room. Creates a Game record and the first Round. Requires exactly 4 players.',
+    request=inline_serializer('StartGameRequest', fields={'room_id': drf_serializers.IntegerField()}),
+    responses={
+        201: GameSerializer,
+        400: OpenApiResponse(description='Game already started, or not enough players'),
+        403: OpenApiResponse(description='You are not in this room'),
+        404: OpenApiResponse(description='Room not found'),
+    },
+)
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def game_start(request):
@@ -42,7 +56,18 @@ def game_start(request):
     return Response(GameSerializer(game).data, status=status.HTTP_201_CREATED)
 
 
-# GET /game/state?room_id=X
+@extend_schema(
+    tags=['game'],
+    summary='Game state',
+    description='Returns the complete game state including all rounds, bids, estimations, and trick results.',
+    parameters=[
+        OpenApiParameter('room_id', OpenApiTypes.INT, OpenApiParameter.QUERY, required=True, description='Room primary key'),
+    ],
+    responses={
+        200: GameSerializer,
+        404: OpenApiResponse(description='Room or game not found'),
+    },
+)
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def game_state(request):
@@ -52,7 +77,21 @@ def game_state(request):
     return Response(GameSerializer(game).data)
 
 
-# POST /game/bid
+@extend_schema(
+    tags=['game'],
+    summary='Submit a bid',
+    description=(
+        'Submits a bid for the authenticated player in the current round. '
+        'Set `is_pass=true` to pass. When not passing, `tricks_called` (≥4) and `trump` are required. '
+        'After the 4th bid the caller is determined automatically and the round advances to ESTIMATION.'
+    ),
+    request=SubmitBidSerializer,
+    responses={
+        201: OpenApiResponse(description='Bid object'),
+        400: OpenApiResponse(description='Round not in BIDDING phase or validation error'),
+        403: OpenApiResponse(description='You are not in this room'),
+    },
+)
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def bid(request):
@@ -88,7 +127,22 @@ def bid(request):
     return Response(BidSerializer(bid_obj).data, status=status.HTTP_201_CREATED)
 
 
-# POST /game/estimate
+@extend_schema(
+    tags=['game'],
+    summary='Submit an estimation',
+    description=(
+        'Submits a tricks estimation for the authenticated player. '
+        'Caller must estimate ≥ their bid; other players must estimate ≤ caller bid. '
+        'After the 4th estimation, the total must not equal 13 — if it does the last submission is rejected. '
+        'On a valid 4th submission the round advances to PLAYING.'
+    ),
+    request=SubmitEstimationSerializer,
+    responses={
+        201: OpenApiResponse(description='Estimation object'),
+        400: OpenApiResponse(description='Constraint violated or total equals 13'),
+        403: OpenApiResponse(description='You are not in this room'),
+    },
+)
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def estimate(request):
@@ -139,7 +193,21 @@ def estimate(request):
     return Response(EstimationSerializer(est_obj).data, status=status.HTTP_201_CREATED)
 
 
-# POST /game/play   (record tricks won after physical play)
+@extend_schema(
+    tags=['game'],
+    summary='Record tricks (play)',
+    description=(
+        'Records the tricks won by each player after the physical card play. '
+        'The `results` array must contain one entry per player and the `tricks_won` values must sum to 13. '
+        'Triggers score calculation and advances the round to ROUND_END.'
+    ),
+    request=RecordTricksSerializer,
+    responses={
+        200: OpenApiResponse(description='{"detail": "Tricks recorded and scores calculated."}'),
+        400: OpenApiResponse(description='Not in PLAYING phase, or tricks do not sum to 13'),
+        403: OpenApiResponse(description='You are not in this room'),
+    },
+)
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def play(request):
@@ -163,7 +231,20 @@ def play(request):
     return Response({'detail': 'Tricks recorded and scores calculated.'})
 
 
-# POST /game/next-round
+@extend_schema(
+    tags=['game'],
+    summary='Advance to next round',
+    description=(
+        'Advances the game to the next round after the current one reaches ROUND_END. '
+        'Returns the new Round object (201), or {"is_finished": true} when the game ends after round 18.'
+    ),
+    request=inline_serializer('NextRoundRequest', fields={'room_id': drf_serializers.IntegerField()}),
+    responses={
+        201: RoundSerializer,
+        200: OpenApiResponse(description='{"detail": "Game finished.", "is_finished": true}'),
+        400: OpenApiResponse(description='Current round is not finished yet'),
+    },
+)
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def next_round(request):
@@ -182,7 +263,20 @@ def next_round(request):
     return Response(RoundSerializer(new_round).data, status=status.HTTP_201_CREATED)
 
 
-# POST /game/advance  (advance phase for UI-only transitions: DISTRIBUTION→DASH_CALL→BIDDING)
+@extend_schema(
+    tags=['game'],
+    summary='Advance phase (manual)',
+    description=(
+        'Manually advances the round through pre-bidding phases: DISTRIBUTION → DASH_CALL → BIDDING. '
+        'All later transitions are triggered automatically by the bid/estimate/play endpoints.'
+    ),
+    request=inline_serializer('AdvancePhaseRequest', fields={'room_id': drf_serializers.IntegerField()}),
+    responses={
+        200: inline_serializer('AdvancePhaseResponse', fields={'phase': drf_serializers.CharField()}),
+        400: OpenApiResponse(description='Cannot manually advance from current phase'),
+        403: OpenApiResponse(description='You are not in this room'),
+    },
+)
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def advance_phase_view(request):
@@ -203,7 +297,26 @@ def advance_phase_view(request):
     return Response({'phase': current_round.phase})
 
 
-# GET /game/scores?room_id=X
+@extend_schema(
+    tags=['game'],
+    summary='Leaderboard scores',
+    description='Returns all players in the room ordered by total score descending.',
+    parameters=[
+        OpenApiParameter('room_id', OpenApiTypes.INT, OpenApiParameter.QUERY, required=True, description='Room primary key'),
+    ],
+    responses={
+        200: inline_serializer(
+            'LeaderboardEntry',
+            fields={
+                'player': drf_serializers.CharField(),
+                'seat': drf_serializers.IntegerField(),
+                'total_score': drf_serializers.IntegerField(),
+            },
+            many=True,
+        ),
+        404: OpenApiResponse(description='Room not found'),
+    },
+)
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def scores(request):
